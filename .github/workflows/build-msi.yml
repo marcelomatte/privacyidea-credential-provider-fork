@@ -1,0 +1,81 @@
+name: build-msi
+# Compila o privacyIDEA Credential Provider (Apache 2.0) e gera o MSI.
+# Execucao manual: aba Actions > build-msi > Run workflow.
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Baixar json.hpp (nlohmann)
+        shell: pwsh
+        run: |
+          $d = "CppClient\nlohmann\x64\include\nlohmann"
+          New-Item -ItemType Directory -Force $d | Out-Null
+          Invoke-WebRequest "https://github.com/nlohmann/json/releases/download/v3.11.3/json.hpp" -OutFile "$d\json.hpp"
+          (Get-Item "$d\json.hpp").Length
+
+      - name: Baixar libfido2 1.15.0 (Yubico)
+        shell: pwsh
+        run: |
+          Invoke-WebRequest "https://developers.yubico.com/libfido2/Releases/libfido2-1.15.0-win.zip" -OutFile fido.zip
+          Expand-Archive fido.zip -DestinationPath fido_tmp
+          Write-Host "== Arquivos .lib encontrados =="
+          Get-ChildItem fido_tmp -Recurse -Filter *.lib | ForEach-Object { $_.FullName }
+          $dest = "libfido2-1.15.0-nfc-enabled"
+          New-Item -ItemType Directory -Force "$dest\static" | Out-Null
+          # headers
+          $inc = Get-ChildItem fido_tmp -Recurse -Directory -Filter include | Select-Object -First 1
+          New-Item -ItemType Directory -Force "$dest\include" | Out-Null
+          Copy-Item "$($inc.FullName)\*" "$dest\include" -Recurse -Force
+          # libs estaticas x64, toolset v143
+          $fido = Get-ChildItem fido_tmp -Recurse -Filter fido2.lib | Where-Object { $_.FullName -match 'Win64|x64' -and $_.FullName -match 'static' } | Select-Object -First 1
+          if (-not $fido) { throw "fido2.lib estatica x64 nao encontrada; veja a lista acima" }
+          Copy-Item "$($fido.DirectoryName)\*.lib" "$dest\static" -Force
+          Write-Host "== libs copiadas =="
+          Get-ChildItem "$dest\static" | ForEach-Object { $_.Name }
+
+      - name: Modulos de merge do runtime VC143
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force lib\merge | Out-Null
+          $msm = Get-ChildItem "C:\Program Files\Microsoft Visual Studio\2022" -Recurse -Filter "Microsoft_VC143_CRT_x64.msm" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $msm) { throw "Microsoft_VC143_CRT_x64.msm nao encontrado no Visual Studio do runner" }
+          Copy-Item $msm.FullName lib\merge\
+          $dbg = Get-ChildItem "C:\Program Files\Microsoft Visual Studio\2022" -Recurse -Filter "Microsoft_VC143_DebugCRT_x64.msm" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($dbg) { Copy-Item $dbg.FullName lib\merge\ }
+          Get-ChildItem lib\merge
+
+      - name: Localizar o WiX Toolset 3.x
+        id: wix
+        shell: pwsh
+        run: |
+          $t = Get-ChildItem "C:\Program Files (x86)" -Recurse -Filter Wix.targets -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $t) {
+            choco install wixtoolset -y --no-progress
+            $t = Get-ChildItem "C:\Program Files (x86)" -Recurse -Filter Wix.targets -ErrorAction SilentlyContinue | Select-Object -First 1
+          }
+          if (-not $t) { throw "Wix.targets nao encontrado" }
+          Write-Host $t.FullName
+          "targets=$($t.FullName)" >> $env:GITHUB_OUTPUT
+
+      - uses: microsoft/setup-msbuild@v2
+
+      - name: Compilar (Release x64) e gerar o MSI
+        shell: pwsh
+        run: |
+          msbuild PrivacyIDEA-CredentialProvider.sln /m /restore /p:Configuration=Release /p:Platform=x64 /p:WixTargetsPath="${{ steps.wix.outputs.targets }}" /v:minimal
+
+      - name: Listar saidas
+        shell: pwsh
+        run: Get-ChildItem -Recurse -Include *.msi,*.dll | Where-Object { $_.FullName -match 'Release' } | ForEach-Object { $_.FullName }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: privacyidea-credential-provider-msi
+          path: |
+            **/*.msi
+          retention-days: 7
