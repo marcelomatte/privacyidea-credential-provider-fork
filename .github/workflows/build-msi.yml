@@ -64,6 +64,16 @@ jobs:
 
       - uses: microsoft/setup-msbuild@v2
 
+      - name: Desativar a assinatura de codigo (nao temos certificado)
+        shell: pwsh
+        run: |
+          foreach ($f in "CredentialProvider\CredentialProvider.vcxproj","CredentialProviderFilter\CredentialProviderFilter.vcxproj") {
+            $c = Get-Content $f -Raw
+            $c = $c -replace '<Command>signtool sign[^<]*</Command>','<Command>echo assinatura desativada</Command>'
+            Set-Content $f $c -NoNewline
+          }
+          Select-String -Path "CredentialProvider\*.vcxproj","CredentialProviderFilter\*.vcxproj" -Pattern "signtool|assinatura desativada"
+
       - name: Compilar (Release x64) e gerar o MSI
         shell: pwsh
         run: |
