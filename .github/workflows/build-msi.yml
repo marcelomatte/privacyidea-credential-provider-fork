@@ -67,7 +67,13 @@ jobs:
       - name: Compilar (Release x64) e gerar o MSI
         shell: pwsh
         run: |
-          msbuild PrivacyIDEA-CredentialProvider.sln /m /restore /p:Configuration=Release /p:Platform=x64 /p:WixTargetsPath="${{ steps.wix.outputs.targets }}" /v:minimal
+          msbuild PrivacyIDEA-CredentialProvider.sln /m /restore /p:Configuration=Release /p:Platform=x64 /p:WixTargetsPath="${{ steps.wix.outputs.targets }}" /v:minimal "/flp1:logfile=erros.log;errorsonly;verbosity=quiet"
+          $code = $LASTEXITCODE
+          if ($code -ne 0 -and (Test-Path erros.log)) {
+            $linhas = Get-Content erros.log | Sort-Object -Unique | Select-Object -First 10
+            foreach ($l in $linhas) { $t = ($l -replace '\[.*$','').Trim(); if ($t.Length -gt 900) { $t = $t.Substring(0,900) }; Write-Host "::error::$t" }
+          }
+          exit $code
 
       - name: Listar saidas
         shell: pwsh
